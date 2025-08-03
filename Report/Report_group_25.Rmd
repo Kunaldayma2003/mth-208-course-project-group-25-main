@@ -1,0 +1,278 @@
+---
+title: "A Deep-dive into YouTube's Global Trends"
+author: "Prashant Shekhar, Kunal Dayma, Bharat Dhawal, Ahammed Ikbal"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+date: "2024-11-14"
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(bslib)
+library(plotly)
+library(treemapify)
+library(ggdendro)
+library(RColorBrewer)
+library(scales)
+library(fmsb)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### **Introduction:**
+
+This Shiny app provides an interactive platform to explore global YouTube trends, enabling users to analyze video performance across different countries, categories, and languages. It offers customizable filtering options, allowing users to examine key metrics like views, likes, comments, and video duration. Through various visualizations such as scatter plots, boxplots, and radar charts, users can uncover patterns and relationships between video engagement and regional preferences. The app also features a treemap, offering intuitive insights into how video categories and languages are distributed worldwide. It’s an invaluable tool for anyone looking to understand global video trends and improve content strategies on YouTube.
+
+#### **Data Scrapping**
+
+* For collecting data, we used the YouTube Data API to gather information on trending videos from different countries. The goal was to retrieve metrics like views, likes, and comments for a broad sample of trending videos globally.
+
+* Country-based Data Collection: We specified a set of countries and fetched trending videos for each region. The COUNTRY_CODES dictionary was used to map country codes to their names for easier identification.
+* Video Categories: Each video’s category was retrieved from YouTube's API, which provides additional context (e.g., music, entertainment, comedy , education).
+* Data Cleaning: Some videos lacked certain details like language or tag information, so we set default values or handled missing fields to avoid errors during data processing.
+* Duration Parsing: YouTube’s API provides video duration in ISO 8601 format (e.g., PT1H2M30S). We converted these values to seconds using the parse_duration function, making it easier to compare video lengths.
+* Pagination Handling: The YouTube API paginates results, so we implemented a loop to retrieve all pages of trending videos for each country, ensuring we captured a representative dataset.
+* Data Bias: Since we are limited to a certain number of trending videos per region, there may be selection bias, as the data represents only the most popular content at the time of scraping.
+* Finally, all collected data was stored in a CSV file for further analysis. The dataset includes fields like video title, category, channel title, publish date, view count, and more.
+
+
+#### **Data Preparation and Cleaning:**
+
+* To prepare the dataset for analysis, we performed data cleaning on the scraped YouTube trending videos data using the dplyr package in R.
+
+* Reading Data: Loaded the dataset from the CSV file containing trending videos from various regions.
+* Language Standardization: The YouTube API provides language codes that sometimes differ in format. To unify the language data, we created a vector (language_vector) that maps each language code to a common language name (e.g., en-US, en-GB, and en were all mapped to "English").
+* Applying Language Mapping: We used the mutate() function and recode() to replace language codes with standardized language names across the dataset.
+* Selecting Relevant Columns: To focus on specific metrics for analysis, we kept only the most relevant columns (region, title, language, category, duration_second, likes, views, comments) for the cleaned dataset.
+* Saving Cleaned Data: The cleaned and filtered data was saved as an RData object for easy access in future analyses.
+
+
+```{r}
+load("global-trendings-dataset.Rdata")
+```
+### **Visual Analysis:**
+
+Now that we have the final datasets, let’s proceed with visual analysis using various types of plots to uncover insights from the data. Several types of visualizations will be employed to explore different aspects of YouTube global trends.
+
+Following are the different types of charts and plots we will be using:
+
+* Histograms – To examine the distribution of views across videos.
+* Boxplots – To compare engagement metrics like views and likes across categories.
+* Scatter plots – To explore relationships between views, duration, and engagement metrics.
+* Radar charts – To analyze viewing habits of different countries and categories.
+* Treemaps – To visualize language distribution across regions.
+
+### **Interesting Question to ask form data:**
+* Do more views increase likes and comments?
+* Do higher view counts increase the likelihood of entering the trending section?
+* What content are people watching in different countries?
+* What are the categories where short-form content is preferred? Same question for long-form
+content. How does it vary over different countries?
+* In which languages do people watch content in different countries?
+
+### **Do more views increase likes and comments? **
+
+* Relationship between Engagement Metrics (views, likes and comments) over different Countries
+* This could uncover the relation between likes and comments, and how they relate to views.
+
+```{r}
+global.trendings.dataset %>%
+  mutate(likes = log(likes), comments = log(comments)) %>%
+  ggplot(aes(x = likes, y = comments, size = views, color = region)) +
+  geom_point(alpha = 0.3) +
+  labs(
+    x = "Likes (log scale)",
+    y = "Comments (log scale)",
+    size = "Views",
+    color = "Countries"
+  ) +
+  theme_minimal()
+
+```
+
+### **Visualize the data for India:**
+```{r}
+global.trendings.dataset %>%
+  filter(region == "India") %>%
+  mutate(likes = log(likes), comments = log(comments)) %>%
+  ggplot(aes(x = likes, y = comments, size = views, color = region)) +
+  geom_point(alpha = 0.3) +
+  labs(
+    x = "Likes (log scale)",
+    y = "Comments (log scale)",
+    size = "Views",
+    color = "Country"
+  ) +
+  theme_minimal()
+```
+
+### **What content are people watching in different countries?**
+
+* Use Radar Chart: This chart is used to display multivariate data in a two-dimensional space, with one axis for each variable. Each region is visualized as a polygon, where the size of the polygon depends on the proportion of videos in each category.
+
+```{r}
+
+unique(global.trendings.dataset$category)
+bivariate_table <- global.trendings.dataset %>%
+  group_by(category, region) %>%
+  summarise(video_count = n(), .groups = 'drop') %>%
+  group_by(region) %>%
+  mutate(proportion = video_count / sum(video_count)) %>%
+  mutate(proportion = proportion * 1000) %>%
+  select(-video_count) %>%
+  pivot_wider(names_from = category, values_from = proportion, values_fill = 0) %>%
+  as.data.frame() %>%
+  top_n(12)
+row.names(bivariate_table) <- bivariate_table$region
+bivariate_table <- bivariate_table[, 2:ncol(bivariate_table)]
+n_colors <- min(12, nrow(bivariate_table))
+colors_border <- brewer.pal(n_colors, "Paired")
+colors_in <- alpha(colors_border, 0.3)
+radarchart(
+  rbind(
+    rep(max(bivariate_table), ncol(bivariate_table)), 
+    rep(min(bivariate_table), ncol(bivariate_table)), 
+    bivariate_table
+  ), 
+  axistype = 0, 
+  pcol = colors_border, 
+  pfcol = colors_in, 
+  plwd = 1, 
+  plty = 1,
+  cglcol = "grey", 
+  cglty = 2, 
+  axislabcol = "black", 
+  cglwd = 0.5, 
+  vlcex = 0.8,
+  title = "Viewing Habit of Different Countries"
+)
+
+```
+
+### **Visualize the data for India:**
+```{r}
+india_data <- global.trendings.dataset %>%
+  filter(region == "India") %>%
+  group_by(category) %>%
+  summarise(video_count = n()) %>%
+  mutate(proportion = video_count / sum(video_count) * 1000) %>%
+  select(-video_count) %>%
+  pivot_wider(names_from = category, values_from = proportion, values_fill = 0) %>%
+  as.data.frame()
+
+row.names(india_data) <- india_data$region
+india_data <- india_data[, 2:ncol(india_data)]
+
+n_colors <- max(3, min(12, nrow(india_data)))
+
+colors_border <- brewer.pal(n_colors, "Paired")
+colors_in <- alpha(colors_border, 0.3)
+
+radarchart(
+  rbind(
+    rep(max(india_data), ncol(india_data)), 
+    rep(min(india_data), ncol(india_data)), 
+    india_data
+  ), 
+  axistype = 0, 
+  pcol = colors_border, 
+  pfcol = colors_in, 
+  plwd = 1, 
+  plty = 1,
+  cglcol = "grey", 
+  cglty = 2, 
+  axislabcol = "black", 
+  cglwd = 0.5, 
+  vlcex = 0.8,
+  title = "Viewing Habit of Videos in India"
+)
+```
+
+* From this visualization, we can observe that Indian people tend to watch more Entertainment content compared to categories like Education, Gaming, Science, and Technology.
+
+### **What are the categories where short-form content is preferred? Same question for long-form content. 
+
+```{r}
+filtered_data <- global.trendings.dataset %>%
+  select(category, duration_second, views) %>%
+  mutate(duration_second = log(duration_second), views = log(views))
+
+ggplot(filtered_data, aes(x = duration_second, y = views)) +
+  geom_point(aes(color = category), alpha = 0.6) +
+  labs(
+    title = "Relation between Views and Duration of videos", 
+    x = "Duration (in seconds, Log Scale)", 
+    y = "Views (Log Scale)",
+    subtitle = "This would help determine if certain categories tend to engage more with longer or shorter videos",
+    color = "Categories"
+  ) +
+  scale_x_continuous(
+    breaks = pretty(seq(0, max(log(filtered_data$duration_second), na.rm = TRUE)), n = 10)
+  ) +  
+  theme_minimal()
+```
+
+* From this visualization, we understand that if the duration of a video is shorter, it tends to receive more views compared to longer videos.
+
+### **In which languages do people watch content in different countries?** 
+
+```{r}
+treeMapCoordinates <- global.trendings.dataset %>%
+  filter(language != "Unknown") %>%
+  group_by(region, language) %>%
+  summarise(video_count = n(), .groups = "drop") %>%  
+  group_by(region) %>%  
+  mutate(proportion = video_count / sum(video_count)) %>%
+  mutate(proportion = proportion * 1000) %>%
+  select(-video_count)
+ggplot(treeMapCoordinates, aes(area = proportion, fill = language, label = language, subgroup = region)) +
+  geom_treemap() +
+  geom_treemap_subgroup_border(colour = "white", size = 1) +
+  geom_treemap_subgroup_text(place = "bottom", alpha = 0.25, colour = "black") +
+  geom_treemap_text(colour = "black", place = "centre", size = 10) +
+  labs(
+    title = "Language Distribution by Country", 
+    subtitle = "This would reveal the distribution of video languages across countries, showing where different languages are most popular",
+    fill = "Languages"
+  ) +
+  theme_minimal()
+```
+*From this visualization, we can see the number of languages used for uploads to YouTube in each country.
+
+```{r}
+treeMapCoordinates_India <- global.trendings.dataset %>%
+  filter(language != "Unknown", region == "India") %>%  # Filter for India
+  group_by(region, language) %>%
+  summarise(video_count = n(), .groups = "drop") %>%
+  group_by(region) %>%  # Group by region to calculate proportions
+  mutate(proportion = video_count / sum(video_count)) %>%
+  mutate(proportion = proportion * 1000) %>%
+  select(-video_count)
+ggplot(treeMapCoordinates_India, aes(area = proportion, fill = language, label = language, subgroup = region)) +
+  geom_treemap() +
+  geom_treemap_subgroup_border(colour = "white", size = 1) +
+  geom_treemap_subgroup_text(place = "bottom", alpha = 0.25, colour = "black") +
+  geom_treemap_text(colour = "black", place = "centre", size = 10) +
+  labs(
+    title = "Language Distribution in India", 
+    subtitle = "This reveals the distribution of video languages across India, showing where different languages are most popular",
+    fill = "Languages"
+  ) +
+  theme_minimal()
+```
+
+* Based on the treemap visualization for India, you can observe the distribution of video languages used by Indian creators.
+
+### **Final conclusions:**
+* This app provides a comprehensive view of YouTube’s global trending patterns. It allows users to explore video engagement metrics across various countries, categories, and languages, highlighting which types of content are most popular. The relationship between video duration and views suggests shorter videos tend to attract more views, indicating viewer preference for concise content. The language distribution visualizations reveal regional diversity in content language, showing how creators cater to local audiences. Overall, this app offers insights into cultural and viewing habits, helping users understand trends in content consumption worldwide.
+
+#### **Referneces**
+* 1. https://developers.google.com/youtube/v3/docs
+* 2. https://shiny.posit.co/r/gallery/#demos
+* 3. https://shiny.rstudio.com
+
